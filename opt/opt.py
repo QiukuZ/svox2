@@ -379,7 +379,7 @@ while True:
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
             # Standard set
-            N_IMGS_TO_EVAL = min(20 if epoch_id > 0 else 5, dset_test.n_images)
+            N_IMGS_TO_EVAL = min(100 if epoch_id > 0 else 5, dset_test.n_images)
             N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)
@@ -393,6 +393,7 @@ while True:
             #  img_save_interval = 1
 
             n_images_gen = 0
+            images_test = []
             for i, img_id in tqdm(enumerate(img_ids), total=len(img_ids)):
                 c2w = dset_test.c2w[img_id].to(device=device)
                 cam = svox2.Camera(c2w,
@@ -405,6 +406,7 @@ while True:
                                    ndc_coeffs=dset_test.ndc_coeffs)
                 rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
+                images_test.append((rgb_pred_test.cpu().numpy() * 255).astype(np.uint8))
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
                 if i % img_save_interval == 0:
                     img_pred = rgb_pred_test.cpu()
@@ -434,7 +436,10 @@ while True:
                 stats_test['mse'] += mse_num
                 stats_test['psnr'] += psnr
                 n_images_gen += 1
-
+            # save test video
+            vid_path = os.path.join(args.train_dir, f"test_{epoch_id}.mov")
+            imageio.mimwrite(vid_path, images_test, fps=25, quality=8)
+            print(f"video saved in {vid_path}")
             if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE or \
                grid.basis_type == svox2.BASIS_TYPE_MLP:
                  # Add spherical map visualization
@@ -466,7 +471,7 @@ while True:
                         stats_test[stat_name], global_step=gstep_id_base)
             summary_writer.add_scalar('epoch_id', float(epoch_id), global_step=gstep_id_base)
             print('eval stats:', stats_test)
-    if epoch_id % max(factor, args.eval_every) == 0: #and (epoch_id > 0 or not args.tune_mode):
+    if epoch_id % max(factor, args.eval_every) == 0 and epoch_id > 0: #and (epoch_id > 0 or not args.tune_mode):
         # NOTE: we do an eval sanity check, if not in tune_mode
         eval_step()
         gc.collect()
