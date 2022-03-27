@@ -1,0 +1,24 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: 当前文件",
+            "type": "python",
+            "python": "/home/qk/anaconda3/envs/plenoxel/bin/python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--train_dir",
+                "/home/qk/Documents/NewPipeline/svox2/opt/ckpt/demo",
+                "/home/qk/Documents/NewPipeline/svox2/data/scannet_demo2/images",
+                "--config",
+                "/home/qk/Documents/NewPipeline/svox2/opt/configs/custom.json"
+            ]
+        }
+    ]
+}
