@@ -404,7 +404,7 @@ while True:
                                    width=dset_test.get_image_size(img_id)[1],
                                    height=dset_test.get_image_size(img_id)[0],
                                    ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=False)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 images_test.append((rgb_pred_test.cpu().numpy() * 255).astype(np.uint8))
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()

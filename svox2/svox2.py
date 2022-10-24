@@ -1156,7 +1156,8 @@ class SparseGrid(nn.Module):
         :return: (H, W, 3), predicted RGB image
         """
         imrend_fn_name = f"volume_render_{self.opt.backend}_image"
-        if self.basis_type != BASIS_TYPE_MLP and imrend_fn_name in _C.__dict__ and not torch.is_grad_enabled() and not return_raylen:
+        # if self.basis_type != BASIS_TYPE_MLP and imrend_fn_name in _C.__dict__ and not torch.is_grad_enabled() and not return_raylen:
+        if False:
             # Use the fast image render kernel if available
             cu_fn = _C.__dict__[imrend_fn_name]
             return cu_fn(

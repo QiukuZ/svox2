@@ -17,11 +17,12 @@ from tqdm import tqdm
 
 if __name__ == '__main__':
     # train_idex = [830,,855,,870, 913]
-    train_index = [830,837,848,855,864,870,886,904,913,917,926]
+    # train_index = [830,837,848,855,864,870,886,904,913,917,926]
+    # train_index = [830,833,837,841,845,848,850,855,860,864,870,886,890,904,913,917,920,926]
     test_index = [841,842,843,844,845,846,847,848,849,850,851,852,853,854,855,856,857,858,859,860,861,862,863,864,865,866,867,868,869,870,871,872,873,874,875,876,877,878,879,880,881,882,883,884,885,886,887,888,889,890,891,892,893,894,895,896,897,898,899,900]
     data_basedir = "/media/qk/GoldData/ScanNet"
     scan_scene = "scene0000_00"
-    nvsf_data_save_path = "/home/qk/Documents/NewPipeline/svox2/data/scannet_nvsf_demo1"
+    nvsf_data_save_path = "/home/qk/Documents/NewPipeline/svox2/data/scannet_nvsf_demo1_more_view"
 
     scene_basedir = os.path.join(data_basedir, "scans", scan_scene)
     # mkdir 
