@@ -30,8 +30,13 @@ class DatasetBase:
         """
         if self.split == "train":
             del self.rays
-            self.rays = select_or_shuffle_rays(self.rays_init, self.permutation,
-                                               self.epoch_size, self.device)
+            
+            if self.epoch_size < 0:
+                self.rays = select_or_shuffle_rays(self.rays_init, self.permutation,
+                                                self.rays_init.origins.size(0), self.device)
+            else:
+                self.rays = select_or_shuffle_rays(self.rays_init, self.permutation,
+                                                self.epoch_size, self.device)
 
     def gen_rays(self, factor=1):
         print(" Generating rays, scaling factor", factor)
@@ -42,8 +47,8 @@ class DatasetBase:
         true_factor = self.h_full / self.h
         self.intrins = self.intrins_full.scale(1.0 / true_factor)
         yy, xx = torch.meshgrid(
-            torch.arange(self.h, dtype=torch.float32) + 0.5,
-            torch.arange(self.w, dtype=torch.float32) + 0.5,
+            torch.arange(self.crop_image_edges, self.h-self.crop_image_edges, dtype=torch.float32) + 0.5,
+            torch.arange(self.crop_image_edges, self.w-self.crop_image_edges, dtype=torch.float32) + 0.5,
         )
         xx = (xx - self.intrins.cx) / self.intrins.fx
         yy = (yy - self.intrins.cy) / self.intrins.fy
@@ -54,6 +59,9 @@ class DatasetBase:
         del xx, yy, zz
         dirs = (self.c2w[:, None, :3, :3] @ dirs)[..., 0]
 
+        if self.crop_image_edges != 0:
+            self.gt = self.gt[:, self.crop_image_edges:-self.crop_image_edges, self.crop_image_edges:-self.crop_image_edges, :]
+            
         if factor != 1:
             gt = F.interpolate(
                 self.gt.permute([0, 3, 1, 2]), size=(self.h, self.w), mode="area"
@@ -61,13 +69,19 @@ class DatasetBase:
             gt = gt.reshape(self.n_images, -1, 3)
         else:
             gt = self.gt.reshape(self.n_images, -1, 3)
-        origins = self.c2w[:, None, :3, 3].expand(-1, self.h * self.w, -1).contiguous()
+
+        origins = self.c2w[:, None, :3, 3].expand(-1, (self.h - 2 * self.crop_image_edges) * (self.w - 2 * self.crop_image_edges), -1).contiguous()
+        
+        # if self.crop_image_edges != 0:
+            
+            
         if self.split == "train":
             origins = origins.view(-1, 3)
             dirs = dirs.view(-1, 3)
             gt = gt.reshape(-1, 3)
 
         self.rays_init = Rays(origins=origins, dirs=dirs, gt=gt)
+        print("Rays Training Size = ", self.rays_init.origins.size(0))
         self.rays = self.rays_init
 
     def get_image_size(self, i : int):

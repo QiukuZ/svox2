@@ -1,4 +1,7 @@
+CKPT_DIR=/home/qiuku/qk_data/svox2/out/result_mv_zeros
+mkdir -p $CKPT_DIR
+
 python opt.py \
-/home/qk/Documents/NewPipeline/svox2/data/scannet_nvsf_demo1 \
---train_dir /home/qk/Documents/NewPipeline/svox2/opt/ckpt/demo_sc1 \
---config /home/qk/Documents/NewPipeline/svox2/opt/configs/custom.json
+/home/qiuku/qk_data/svox2/data/scannet_0000_mv \
+--train_dir $CKPT_DIR \
+--config /home/qiuku/svox2/opt/configs/custom.json

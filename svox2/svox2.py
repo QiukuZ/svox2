@@ -10,7 +10,7 @@ from functools import reduce
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation
 import numpy as np
-
+import os
 _C = utils._get_c_extension()
 
 
@@ -367,6 +367,8 @@ class SparseGrid(nn.Module):
         background_nlayers : int = 0,  # BG MSI layers
         background_reso : int = 256,  # BG MSI cubemap face size
         device: Union[torch.device, str] = "cpu",
+        init_by_occ: bool=False,
+        occ_prob_path: str=""
     ):
         super().__init__()
         self.basis_type = basis_type
@@ -417,6 +419,7 @@ class SparseGrid(nn.Module):
         else:
             init_links = torch.arange(n3, device=device, dtype=torch.int32)
 
+        print("init_links = ", init_links)
         if use_sphere_bound:
             X = torch.arange(reso[0], dtype=torch.float32, device=device) - 0.5
             Y = torch.arange(reso[1], dtype=torch.float32, device=device) - 0.5
@@ -446,6 +449,12 @@ class SparseGrid(nn.Module):
         else:
             self.capacity = n3
 
+        # if init_by_occ:
+        #     print("Init grid by occ grid !")
+        #     assert (
+        #         not os.path.exists(occ_prob_path)
+        #     ), "occ_grid_path not exist"    
+        #     occ_grid = torch.load(occ_prob_path)
         self.density_data = nn.Parameter(
             torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
         )

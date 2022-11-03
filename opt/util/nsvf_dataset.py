@@ -41,7 +41,8 @@ class NSVFDataset(DatasetBase):
         scale : Optional[float] = 1.0,                    # Image scaling (on load)
         permutation: bool = True,
         white_bkgd: bool = True,
-        normalize_by_bbox: bool = False,
+        crop_image_edges: int = 0,
+        normalize_by_bbox: bool = True,
         data_bbox_scale : float = 1.1,                    # Only used if normalize_by_bbox
         cam_scale_factor : float = 0.95,
         normalize_by_camera: bool = True,
@@ -55,6 +56,7 @@ class NSVFDataset(DatasetBase):
         if scale is None:
             scale = 1.0
 
+        self.crop_image_edges = crop_image_edges
         self.device = device
         self.permutation = permutation
         self.epoch_size = epoch_size
@@ -137,6 +139,7 @@ class NSVFDataset(DatasetBase):
 
         print('NORMALIZE BY?', 'bbox' if normalize_by_bbox else 'camera' if normalize_by_camera else 'manual')
         if normalize_by_bbox:
+            print('data_bbox_scale = ', data_bbox_scale)
             # Not used, but could be helpful
             bbox_path = path.join(root, "bbox.txt")
             if path.exists(bbox_path):

@@ -41,6 +41,7 @@ class LLFFDataset(DatasetBase):
         split : str,
         epoch_size : Optional[int] = None,
         device: Union[str, torch.device] = "cpu",
+        crop_image_edges: int = 0,
         permutation: bool = True,
         factor: int = 1,
         ref_img: str="",

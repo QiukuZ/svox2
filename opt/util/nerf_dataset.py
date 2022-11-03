@@ -34,6 +34,7 @@ class NeRFDataset(DatasetBase):
         device: Union[str, torch.device] = "cpu",
         scene_scale: Optional[float] = None,
         factor: int = 1,
+        crop_image_edges: int = 0,
         scale : Optional[float] = None,
         permutation: bool = True,
         white_bkgd: bool = True,

@@ -29,8 +29,6 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from typing import NamedTuple, Optional, Union
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
 parser = argparse.ArgumentParser()
 config_util.define_common_args(parser)
 
@@ -56,7 +54,9 @@ group.add_argument('--init_iters', type=int, default=
 group.add_argument('--upsample_density_add', type=float, default=
                     0.0,
                     help='add the remaining density by this amount when upsampling')
-
+group.add_argument('--crop_image_edges', type=int, default=
+                     0,
+                    help='for some dataset need crop image edges because of distortion')
 group.add_argument('--basis_type',
                     choices=['sh', '3d_texture', 'mlp'],
                     default='sh',
@@ -72,6 +72,10 @@ group.add_argument('--mlp_width', type=int, default=32, help='MLP width if using
 group.add_argument('--background_nlayers', type=int, default=0,#32,
                    help='Number of background layers (0=disable BG model)')
 group.add_argument('--background_reso', type=int, default=512, help='Background resolution')
+group.add_argument('--init_by_occ', type=bool, default=False, help='init by occ')
+group.add_argument('--init_by_occ_sparse', type=bool, default=False, help='init by occ sparse')
+group.add_argument('--occ_prob_path', type=str, default="", help='occ prob grid path')
+group.add_argument('--gpu_id', type=int, default=0, help='GPU id')
 
 
 
@@ -246,6 +250,10 @@ group.add_argument('--nosphereinit', action='store_true', default=False,
 
 args = parser.parse_args()
 config_util.maybe_merge_config_file(args)
+gpu_id = args.gpu_id
+device = "cuda" if torch.cuda.is_available() else "cpu"
+torch.cuda.set_device(gpu_id)
+print("Use GPU ID = ", gpu_id)
 
 assert args.lr_sigma_final <= args.lr_sigma, "lr_sigma must be >= lr_sigma_final"
 assert args.lr_sh_final <= args.lr_sh, "lr_sh must be >= lr_sh_final"
@@ -270,6 +278,7 @@ dset = datasets[args.dataset_type](
                args.data_dir,
                split="train",
                device=device,
+               crop_image_edges=args.crop_image_edges,
                factor=factor,
                n_images=args.n_train,
                **config_util.build_data_options(args))
@@ -285,21 +294,25 @@ global_start_time = datetime.now()
 grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         center=dset.scene_center,
                         radius=dset.scene_radius,
-                        use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
+                        # use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
+                        use_sphere_bound=False,
                         basis_dim=args.sh_dim,
-                        use_z_order=True,
+                        use_z_order=False,
                         device=device,
                         basis_reso=args.basis_reso,
                         basis_type=svox2.__dict__['BASIS_TYPE_' + args.basis_type.upper()],
                         mlp_posenc_size=args.mlp_posenc_size,
                         mlp_width=args.mlp_width,
                         background_nlayers=args.background_nlayers,
-                        background_reso=args.background_reso)
+                        background_reso=args.background_reso,
+                        # init_by_occ=args.init_by_occ_sparse,
+                        occ_prob_path=args.occ_prob_path)
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
 grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
 
+# grid.save("/home/qiuku/qk_data/svox2/out/init.ckpt")
 if grid.use_background:
     grid.background_data.data[..., -1] = args.init_sigma_bg
     #  grid.background_data.data[..., :-1] = 0.5 / svox2.utils.SH_C0
@@ -344,6 +357,47 @@ resample_cameras = [
                      height=dset.get_image_size(i)[0],
                      ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(dset.c2w)
     ]
+
+if args.init_by_occ or args.init_by_occ_sparse:
+    print("Init by occ (not Sparse)")
+    grid_init_links = svox2.utils.gen_morton(reso_list[0][0], device=device, dtype=torch.int32).flatten()    
+    assert(
+        grid_init_links.shape[0] == grid.density_data.data.shape[0]
+    ),  "Grid Resolution of occ_grid and plenoxel not same !"
+    occ_grid = torch.tensor(torch.load(args.occ_prob_path), device=device)
+    # occ_grid_half = F.interpolate(occ_grid[None,None,:,:,:], scale_factor=(0.5,0.5,0.5), mode = "trilinear")
+    # occ_grid_new = F.interpolate(occ_grid_half, scale_factor=(2,2,2), mode = "nearest")
+
+    # DownSample
+    occ_grid_half = torch.max(occ_grid[::2,::2,::2], occ_grid[1::2,1::2,1::2])
+    occ_grid_half = torch.max(occ_grid_half, occ_grid[::2,::2,1::2])
+    occ_grid_half = torch.max(occ_grid_half, occ_grid[::2,1::2,::2])
+    occ_grid_half = torch.max(occ_grid_half, occ_grid[1::2,::2,::2])
+    occ_grid_half = torch.max(occ_grid_half, occ_grid[::2,1::2,1::2])
+    occ_grid_half = torch.max(occ_grid_half, occ_grid[::2,1::2,1::2])
+    occ_grid_half = torch.max(occ_grid_half, occ_grid[1::2,::2,1::2])
+    # UpSample
+    occ_grid[::2, ::2, ::2] = occ_grid_half
+    occ_grid[1::2, ::2, ::2] = occ_grid_half
+    occ_grid[::2, 1::2, ::2] = occ_grid_half
+    occ_grid[::2, ::2, 1::2] = occ_grid_half
+    occ_grid[1::2, 1::2, ::2] = occ_grid_half
+    occ_grid[::2, 1::2, 1::2] = occ_grid_half
+    occ_grid[1::2, ::2, 1::2] = occ_grid_half
+    occ_grid[1::2, 1::2, 1::2] = occ_grid_half
+
+    grid.density_data.data[grid.links[occ_grid > 0.03].tolist()] = 300
+    if args.init_by_occ_sparse:
+        print("Init resample SparseGrid !!!")
+        use_sparsify = True
+        z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]
+        grid.resample(reso=reso_list[reso_id],
+                            sigma_thresh=args.density_thresh,
+                            weight_thresh=args.weight_thresh / z_reso if use_sparsify else 0.0,
+                            dilate=2, #use_sparsify,
+                            cameras=resample_cameras if args.thresh_type == 'weight' else None,
+                            max_elements=args.max_grid_elements)
+
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
@@ -404,7 +458,7 @@ while True:
                                    width=dset_test.get_image_size(img_id)[1],
                                    height=dset_test.get_image_size(img_id)[0],
                                    ndc_coeffs=dset_test.ndc_coeffs)
-                rgb_pred_test = grid.volume_render_image(cam, use_kernel=False)
+                rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 images_test.append((rgb_pred_test.cpu().numpy() * 255).astype(np.uint8))
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
@@ -427,8 +481,15 @@ while True:
                                 depth_img,
                                 global_step=gstep_id_base, dataformats='HWC')
 
+                if args.crop_image_edges != 0:
+                    crop_size = args.crop_image_edges
+                    crop_mask = torch.zeros_like(rgb_gt_test[:,:,0])
+                    crop_mask[crop_size:-crop_size, crop_size:-crop_size] = 1.
+                else:
+                    crop_mask = torch.ones_like(rgb_gt_test[:,:,0])
+                crop_mask = crop_mask > 0.5    
                 rgb_pred_test = rgb_gt_test = None
-                mse_num : float = all_mses.mean().item()
+                mse_num : float = all_mses[crop_mask].mean().item()
                 psnr = -10.0 * math.log10(mse_num)
                 if math.isnan(psnr):
                     print('NAN PSNR', i, img_id, mse_num)
@@ -501,6 +562,7 @@ while True:
             rays = svox2.Rays(batch_origins, batch_dirs)
 
             #  with Timing("volrend_fused"):
+            # rgb_pred_tes = grid._volume_render_gradcheck_lerp(rays=rays)
             rgb_pred = grid.volume_render_fused(rays, rgb_gt,
                     beta_loss=args.lambda_beta,
                     sparsity_loss=args.lambda_sparsity,

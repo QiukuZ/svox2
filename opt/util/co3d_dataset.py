@@ -33,6 +33,7 @@ class CO3DDataset(DatasetBase):
         seq_id : Optional[int] = None,
         epoch_size : Optional[int] = None,
         permutation: bool = True,
+        crop_image_edges: int = 0,
         device: Union[str, torch.device] = "cpu",
         max_image_dim: int = 800,
         max_pose_dist: float = 5.0,
