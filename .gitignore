@@ -4,3 +4,8 @@ __pycache__/
 Session.vim
 ckpt/
 data/
+build/
+convonet/data/
+svox2.egg-info/
+test_grid.pt
+out/

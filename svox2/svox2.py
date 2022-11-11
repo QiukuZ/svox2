@@ -368,7 +368,9 @@ class SparseGrid(nn.Module):
         background_reso : int = 256,  # BG MSI cubemap face size
         device: Union[torch.device, str] = "cpu",
         init_by_occ: bool=False,
-        occ_prob_path: str=""
+        occ_prob_path: str="",
+        init_by_links: bool=False,
+        init_occ_links: Union[torch.Tensor,None] = None
     ):
         super().__init__()
         self.basis_type = basis_type
@@ -419,7 +421,8 @@ class SparseGrid(nn.Module):
         else:
             init_links = torch.arange(n3, device=device, dtype=torch.int32)
 
-        print("init_links = ", init_links)
+        print("init_links.shape = ", init_links.shape)
+    
         if use_sphere_bound:
             X = torch.arange(reso[0], dtype=torch.float32, device=device) - 0.5
             Y = torch.arange(reso[1], dtype=torch.float32, device=device) - 0.5
@@ -445,7 +448,7 @@ class SparseGrid(nn.Module):
             data_mask = torch.cumsum(data_mask, dim=0) - 1
 
             init_links[mask] = data_mask[idxs].int()
-            init_links[~mask] = -1
+            init_links[~mask] = -1 
         else:
             self.capacity = n3
 
@@ -455,16 +458,29 @@ class SparseGrid(nn.Module):
         #         not os.path.exists(occ_prob_path)
         #     ), "occ_grid_path not exist"    
         #     occ_grid = torch.load(occ_prob_path)
-        self.density_data = nn.Parameter(
-            torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
-        )
-        # Called sh for legacy reasons, but it's just the coeffients for whatever
-        # spherical basis functions
-        self.sh_data = nn.Parameter(
-            torch.zeros(
-                self.capacity, self.basis_dim * 3, dtype=torch.float32, device=device
+
+        if init_by_links:
+            self.capacity = (init_occ_links >= 0).sum()
+            init_links = init_occ_links
+            self.density_data = nn.Parameter(
+                10.*torch.ones(self.capacity, 1, dtype=torch.float32, device=device)
             )
-        )
+            self.sh_data = nn.Parameter(
+                torch.zeros(
+                    self.capacity, self.basis_dim * 3, dtype=torch.float32, device=device
+                )
+            )
+        else:
+            self.density_data = nn.Parameter(
+                torch.zeros(self.capacity, 1, dtype=torch.float32, device=device)
+            )
+            # Called sh for legacy reasons, but it's just the coeffients for whatever
+            # spherical basis functions
+            self.sh_data = nn.Parameter(
+                torch.zeros(
+                    self.capacity, self.basis_dim * 3, dtype=torch.float32, device=device
+                )
+            )
 
         if self.basis_type == BASIS_TYPE_3D_TEXTURE:
             # Unit sphere embedded in a cube
@@ -529,7 +545,10 @@ class SparseGrid(nn.Module):
                 requires_grad=False
             )
 
-        self.register_buffer("links", init_links.view(reso))
+        if init_by_links:
+            self.register_buffer("links", init_links)
+        else:
+            self.register_buffer("links", init_links.view(reso))
         self.links: torch.Tensor
         self.opt = RenderOptions()
         self.sparse_grad_indexer: Optional[torch.Tensor] = None

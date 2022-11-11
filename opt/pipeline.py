@@ -1,22 +1,25 @@
-# Copyright 2021 Alex Yu
+import torch
+import os
+import shutil
+import argparse
+from tqdm import trange
+from tqdm import tqdm
+import time
 
+# Import Libs for svox2
 # First, install svox2
 # Then, python opt.py <path_to>/nerf_synthetic/<scene> -t ckpt/<some_name>
 # or use launching script:   sh launch.sh <EXP_NAME> <GPU> <DATA_DIR>
-import torch
 import torch.cuda
 import torch.optim
 import torch.nn.functional as F
 import svox2
 import json
 import imageio
-import os
 from os import path
-import shutil
 import gc
 import numpy as np
 import math
-import argparse
 import cv2
 from util.dataset import datasets
 from util.util import Timing, get_expon_lr_func, generate_dirs_equirect, viridis_cmap
@@ -26,12 +29,12 @@ from warnings import warn
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 
-from tqdm import tqdm
 from typing import NamedTuple, Optional, Union
+
+###################Plenoxel Config Start############################
 
 parser = argparse.ArgumentParser()
 config_util.define_common_args(parser)
-
 
 group = parser.add_argument_group("general")
 group.add_argument('--train_dir', '-t', type=str, default='ckpt',
@@ -262,9 +265,6 @@ assert args.lr_basis_final <= args.lr_basis, "lr_basis must be >= lr_basis_final
 os.makedirs(args.train_dir, exist_ok=True)
 summary_writer = SummaryWriter(args.train_dir)
 
-reso_list = json.loads(args.reso)
-reso_id = 0
-
 with open(path.join(args.train_dir, 'args.json'), 'w') as f:
     json.dump(args.__dict__, f, indent=2)
     # Changed name to prevent errors
@@ -272,28 +272,171 @@ with open(path.join(args.train_dir, 'args.json'), 'w') as f:
 
 torch.manual_seed(20200823)
 np.random.seed(20200823)
-#################################################################
-factor = 1
+###################Plenoxel Config End############################
+
+# Import Libs for convonet
+from collections import defaultdict
+import pandas as pd
+import sys
+BASE_DIR = os.path.dirname(sys.path[0])
+sys.path.append(os.path.join(BASE_DIR, "convonet"))
+from src import config
+from src.checkpoints import CheckpointIO
+from src.utils.io import export_pointcloud
+from src.utils.visualize import visualize_data
+# from src.utils.voxels import VoxelGrid
+
+###################ConvONet Config Start############################
+
+parser = argparse.ArgumentParser(
+    description='Extract meshes from occupancy process.'
+)
+parser.add_argument('--config_convonet', type=str, help='Path to config file.')
+parser.add_argument('--data_dir', type=str, help='Just for plenoxel config.')
+parser.add_argument('--train_dir', type=str, help='Just for plenoxel config.')
+parser.add_argument('--config', type=str, help='Just for plenoxel config.')
+
+parser.add_argument('--no-cuda', action='store_true', help='Do not use cuda.')
+
+args_convonet = parser.parse_args()
+cfg_convonet = config.load_config(args_convonet.config_convonet, 'convonet/configs/default.yaml')
+is_cuda = (torch.cuda.is_available() and not args_convonet.no_cuda)
+device = torch.device("cuda" if is_cuda else "cpu")
+
+out_dir = cfg_convonet['training']['out_dir']
+generation_dir = os.path.join(out_dir, cfg_convonet['generation']['generation_dir'])
+out_time_file = os.path.join(generation_dir, 'time_generation_full.pkl')
+out_time_file_class = os.path.join(generation_dir, 'time_generation.pkl')
+
+input_type = cfg_convonet['data']['input_type']
+vis_n_outputs = cfg_convonet['generation']['vis_n_outputs']
+if vis_n_outputs is None:
+    vis_n_outputs = -1
+
+##################ConvONet Config END################################
+
+# Dataset
+dataset = config.get_dataset('test', cfg_convonet, return_idx=True)
+
+# Model
+model = config.get_model(cfg_convonet, device=device, dataset=dataset)
+checkpoint_io = CheckpointIO(out_dir, model=model)
+checkpoint_io.load(cfg_convonet['test']['model_file'])
+
+# Generator
+generator = config.get_generator(model, cfg_convonet, device=device)
+
+# Statistics
+time_dicts = []
+# Generate
+model.eval()
+
+# cpu to cuda
+data_cpu = dataset[0]
+data = {}
+data['pointcloud_crop'] = torch.tensor(data_cpu['pointcloud_crop'],device=device).unsqueeze(0)
+data['inputs'] = torch.tensor(data_cpu['inputs'],device=device).unsqueeze(0)
+data['inputs.normals'] = torch.tensor(data_cpu['inputs.normals'],device=device).unsqueeze(0)
+data['inputs.mask'] = torch.tensor(data_cpu['inputs.mask'],device=device).unsqueeze(0)
+data['inputs.ind'] = {}
+data['inputs.ind']['grid'] = torch.tensor(data_cpu['inputs.ind']['grid'],device=device).unsqueeze(0)
+data['idx'] = torch.tensor(data_cpu['idx'],device=device).unsqueeze(0)
+generate_mesh = True
+
+# Output folders
+mesh_dir = os.path.join(generation_dir, 'meshes')
+pointcloud_dir = os.path.join(generation_dir, 'pointcloud')
+in_dir = os.path.join(generation_dir, 'input')
+generation_vis_dir = os.path.join(generation_dir, 'vis')
+
+# Get index etc.
+idx = data['idx']
+
+try:
+    model_dict = dataset.get_model_dict(idx)
+except AttributeError:
+    model_dict = {'model': str(idx), 'category': 'n/a'}
+
+modelname = model_dict['model']
+
+if generate_mesh and not os.path.exists(mesh_dir):
+    os.makedirs(mesh_dir)
+
+if not os.path.exists(in_dir):
+    os.makedirs(in_dir)
+
+# Generate OccGrid
+
+# Generate outputs
+out_file_dict = {}
+inputs = data.get('inputs', torch.empty(1, 0)).to(device)
+n_crop, n_crop_axis = generator.generate_vols_sliding(inputs)
+bb_box_min = generator.vol_bound["query_vol"][0][0]
+bb_box_max = generator.vol_bound["query_vol"][-1][-1]
+bbox = np.hstack([bb_box_min, bb_box_max])
+print("BBox size = ", bb_box_max - bb_box_min)
+np.savetxt(os.path.join(args.train_dir, "bbox.txt"), bbox)
+print("BBox saved in : ", os.path.join(args.train_dir, "bbox.txt"))
+
+# Plenoxel DataSet Loading
 dset = datasets[args.dataset_type](
                args.data_dir,
                split="train",
                device=device,
                crop_image_edges=args.crop_image_edges,
-               factor=factor,
+               factor=1,
+               bbox=bbox,
                n_images=args.n_train,
                **config_util.build_data_options(args))
-
 if args.background_nlayers > 0 and not dset.should_use_background:
     warn('Using a background model for dataset type ' + str(type(dset)) + ' which typically does not use background')
 
 dset_test = datasets[args.dataset_type](
-        args.data_dir, split="test", **config_util.build_data_options(args))
-
+        args.data_dir, bbox=bbox, split="test", **config_util.build_data_options(args))
 global_start_time = datetime.now()
 
+# Use N_crop_axis_init Sparse_grid
+occ_threshold = 0.01
+threshold = np.log(occ_threshold) - np.log(1. - occ_threshold)
+
+# @TODO : Add 3D maxpooling
+reso_list = json.loads(args.reso)
+reso_id = 0
+r = reso_list[reso_id][0]
+all_grid_resolution = n_crop_axis * r
+all_grid_links = torch.ones(all_grid_resolution.tolist()).int().to(device) * -1
+n_crop_div = np.array([n_crop_axis[1]*n_crop_axis[2], n_crop_axis[2], 1])
+
+occ_density = []
+occ_cur_cap = 0
+for i in trange(n_crop):
+    occ_value = generator.generate_n_idx_occ(inputs, i)
+    occ_mask = occ_value > threshold
+    occ_cap = occ_mask.sum().item()
+
+    # index to xiyizi
+    i_xyz = np.zeros(3)
+    i_tmp = i
+    for ii in range(3):
+        i_xyz[ii] = i_tmp // n_crop_div[ii]
+        i_tmp = i_tmp % n_crop_div[ii]
+
+    idx_start = i_xyz.astype(np.int32())  * r
+    idx_end = idx_start + r
+    all_grid_links[idx_start[0]:idx_end[0], idx_start[1]:idx_end[1], idx_start[2]:idx_end[2]][occ_mask] = torch.arange(occ_cap).int().to(device) + occ_cur_cap
+    occ_cur_cap += occ_cap
+    # print("arange = ",  torch.arange(occ_cap).int().to(device) + occ_cur_cap)
+    # print("occ_cur_cap = ", occ_cur_cap, " links_cap = ", (all_grid_links >= 0).sum().item())
+# Get grid cap
+occ_cap = (all_grid_links >= 0).sum().item()
+print("All grid capacity = ", occ_cap)
+
+factor = 1
+reso_list = []
+reso_list.append(all_grid_resolution.tolist())
 grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         center=dset.scene_center,
-                        radius=dset.scene_radius,
+                        radius=n_crop_axis / n_crop_axis.max(),
                         # use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
                         use_sphere_bound=False,
                         basis_dim=args.sh_dim,
@@ -305,26 +448,21 @@ grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         mlp_width=args.mlp_width,
                         background_nlayers=args.background_nlayers,
                         background_reso=args.background_reso,
-                        # init_by_occ=args.init_by_occ_sparse,
-                        occ_prob_path=args.occ_prob_path)
+                        init_by_links=True,
+                        init_occ_links=all_grid_links)
+
+# Del ConvONet Memory
+del generator
+del model
+del checkpoint_io
+del dataset
+torch.cuda.empty_cache()
 
 # DC -> gray; mind the SH scaling!
 grid.sh_data.data[:] = 0.0
-grid.density_data.data[:] = 0.0 if args.lr_fg_begin_step > 0 else args.init_sigma
-
-# grid.save("/home/qiuku/qk_data/svox2/out/init.ckpt")
+grid.density_data.data[:] = 100.0
 if grid.use_background:
     grid.background_data.data[..., -1] = args.init_sigma_bg
-    #  grid.background_data.data[..., :-1] = 0.5 / svox2.utils.SH_C0
-
-#  grid.sh_data.data[:, 0] = 4.0
-#  osh = grid.density_data.data.shape
-#  den = grid.density_data.data.view(grid.links.shape)
-#  #  den[:] = 0.00
-#  #  den[:, :256, :] = 1e9
-#  #  den[:, :, 0] = 1e9
-#  grid.density_data.data = den.view(osh)
-
 optim_basis_mlp = None
 
 if grid.basis_type == svox2.BASIS_TYPE_3D_TEXTURE:
@@ -358,46 +496,6 @@ resample_cameras = [
                      ndc_coeffs=dset.ndc_coeffs) for i, c2w in enumerate(dset.c2w)
     ]
 
-if args.init_by_occ or args.init_by_occ_sparse:
-    print("Init by occ (not Sparse)")
-    grid_init_links = svox2.utils.gen_morton(reso_list[0][0], device=device, dtype=torch.int32).flatten()    
-    assert(
-        grid_init_links.shape[0] == grid.density_data.data.shape[0]
-    ),  "Grid Resolution of occ_grid and plenoxel not same !"
-    occ_grid = torch.tensor(torch.load(args.occ_prob_path), device=device)
-    # occ_grid_half = F.interpolate(occ_grid[None,None,:,:,:], scale_factor=(0.5,0.5,0.5), mode = "trilinear")
-    # occ_grid_new = F.interpolate(occ_grid_half, scale_factor=(2,2,2), mode = "nearest")
-
-    # # DownSample
-    # occ_grid_half = torch.max(occ_grid[::2,::2,::2], occ_grid[1::2,1::2,1::2])
-    # occ_grid_half = torch.max(occ_grid_half, occ_grid[::2,::2,1::2])
-    # occ_grid_half = torch.max(occ_grid_half, occ_grid[::2,1::2,::2])
-    # occ_grid_half = torch.max(occ_grid_half, occ_grid[1::2,::2,::2])
-    # occ_grid_half = torch.max(occ_grid_half, occ_grid[::2,1::2,1::2])
-    # occ_grid_half = torch.max(occ_grid_half, occ_grid[::2,1::2,1::2])
-    # occ_grid_half = torch.max(occ_grid_half, occ_grid[1::2,::2,1::2])
-    # # UpSample
-    # occ_grid[::2, ::2, ::2] = occ_grid_half
-    # occ_grid[1::2, ::2, ::2] = occ_grid_half
-    # occ_grid[::2, 1::2, ::2] = occ_grid_half
-    # occ_grid[::2, ::2, 1::2] = occ_grid_half
-    # occ_grid[1::2, 1::2, ::2] = occ_grid_half
-    # occ_grid[::2, 1::2, 1::2] = occ_grid_half
-    # occ_grid[1::2, ::2, 1::2] = occ_grid_half
-    # occ_grid[1::2, 1::2, 1::2] = occ_grid_half
-
-    grid.density_data.data[grid.links[occ_grid > 0.03].tolist()] = 300
-    if args.init_by_occ_sparse:
-        print("Init resample SparseGrid !!!")
-        use_sparsify = True
-        z_reso = reso_list[reso_id] if isinstance(reso_list[reso_id], int) else reso_list[reso_id][2]
-        grid.resample(reso=reso_list[reso_id],
-                            sigma_thresh=args.density_thresh,
-                            weight_thresh=args.weight_thresh / z_reso if use_sparsify else 0.0,
-                            dilate=2, #use_sparsify,
-                            cameras=resample_cameras if args.thresh_type == 'weight' else None,
-                            max_elements=args.max_grid_elements)
-
 ckpt_path = path.join(args.train_dir, 'ckpt.npz')
 
 lr_sigma_func = get_expon_lr_func(args.lr_sigma, args.lr_sigma_final, args.lr_sigma_delay_steps,
@@ -410,7 +508,7 @@ lr_sigma_bg_func = get_expon_lr_func(args.lr_sigma_bg, args.lr_sigma_bg_final, a
                                args.lr_sigma_bg_delay_mult, args.lr_sigma_bg_decay_steps)
 lr_color_bg_func = get_expon_lr_func(args.lr_color_bg, args.lr_color_bg_final, args.lr_color_bg_delay_steps,
                                args.lr_color_bg_delay_mult, args.lr_color_bg_decay_steps)
-lr_sigma_factor = 1.0
+lr_sigma_factor = 0.2
 lr_sh_factor = 1.0
 lr_basis_factor = 1.0
 
@@ -433,7 +531,7 @@ while True:
             stats_test = {'psnr' : 0.0, 'mse' : 0.0}
 
             # Standard set
-            N_IMGS_TO_EVAL = min(100 if epoch_id > 0 else 5, dset_test.n_images)
+            N_IMGS_TO_EVAL = min(100 if epoch_id >= 0 else 5, dset_test.n_images)
             N_IMGS_TO_SAVE = N_IMGS_TO_EVAL # if not args.tune_mode else 1
             img_eval_interval = dset_test.n_images // N_IMGS_TO_EVAL
             img_save_interval = (N_IMGS_TO_EVAL // N_IMGS_TO_SAVE)

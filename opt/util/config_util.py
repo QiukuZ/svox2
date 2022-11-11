@@ -5,7 +5,8 @@ import json
 
 
 def define_common_args(parser : argparse.ArgumentParser):
-    parser.add_argument('data_dir', type=str)
+    parser.add_argument('--data_dir', type=str, required=True)
+    parser.add_argument('--config_convonet', type=str, default="")
 
     parser.add_argument('--config', '-c',
                          type=str,

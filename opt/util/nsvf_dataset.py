@@ -46,6 +46,7 @@ class NSVFDataset(DatasetBase):
         data_bbox_scale : float = 1.1,                    # Only used if normalize_by_bbox
         cam_scale_factor : float = 0.95,
         normalize_by_camera: bool = True,
+        bbox: Optional[np.array] = None,
         **kwargs
     ):
         super().__init__()
@@ -142,7 +143,16 @@ class NSVFDataset(DatasetBase):
             print('data_bbox_scale = ', data_bbox_scale)
             # Not used, but could be helpful
             bbox_path = path.join(root, "bbox.txt")
-            if path.exists(bbox_path):
+            
+            if bbox is not None:
+                center = (bbox[:3] + bbox[3:6]) * 0.5
+                radius = (bbox[3:6] - bbox[:3]) * 0.5 * data_bbox_scale
+
+                # Recenter
+                self.c2w_f64[:, :3, 3] -= center
+                # Rescale
+                scene_scale = 1.0 / radius.max()
+            elif path.exists(bbox_path):
                 bbox_data = np.loadtxt(bbox_path)
                 center = (bbox_data[:3] + bbox_data[3:6]) * 0.5
                 radius = (bbox_data[3:6] - bbox_data[:3]) * 0.5 * data_bbox_scale

@@ -1,7 +1,7 @@
-CKPT_DIR=/home/qiuku/qk_data/svox2/out/result_all_sparse
+CKPT_DIR=/home/qiuku/ssd_data/plenoxel_out/sparse_si_test
 mkdir -p $CKPT_DIR
 
 python opt.py \
-/home/qiuku/qk_data/svox2/data/scannet_0000_all \
+--data_dir /home/qiuku/ssd_data/scannet_0000_all \
 --train_dir $CKPT_DIR \
---config /home/qiuku/svox2/opt/configs/sc_sparse.json
+--config /home/qiuku/code/svox2/opt/configs/sc_sparse.json
